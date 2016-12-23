@@ -1,0 +1,76 @@
+:root {
+	--left: 15em;
+	--padding: .5em;
+}
+
+body {
+	margin: 0;
+	padding: 0;
+	background: #2d2d2d;
+	color: #aaaaaa;
+}
+
+.files {
+	position: absolute;
+	padding: var(--padding);
+	box-sizing: border-box;
+	left: 0;
+	width: var(--left);
+	height: 100%;
+	border-right: 1px solid #000000;
+}
+
+.textupload {
+	position: absolute;
+	padding: var(--padding);
+	box-sizing: border-box;
+	left: var(--left);
+	width: calc((100% - var(--left)) / 2);
+	height: 100%;
+	border-right: 1px solid #000000;
+}
+
+.textdownload {
+	position: absolute;
+	padding: var(--padding);
+	box-sizing: border-box;
+	right: 0;
+	width: calc((100% - var(--left)) / 2);
+	height: 100%;
+}
+
+
+.right-button {
+	position: absolute;
+	right: var(--padding);
+}
+
+.bigarea {
+	position: absolute;
+	display: block;
+	top: 3em;
+	bottom: var(--padding);
+	right: var(--padding);
+	left: var(--padding);
+}
+
+.bigarea textarea {
+	height: 100%;
+	width: 100%;
+	box-sizing: border-box;
+}
+
+.file-list {
+	padding: 0;
+	list-style-type: none;
+}
+
+.file-list li a {
+	text-decoration: none;
+	transition: all 0.5s ease;
+	color: #0a92c8;
+}
+
+.file-list li a:hover {
+	color: #8bddfe;
+}
