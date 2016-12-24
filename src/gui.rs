@@ -2,7 +2,6 @@ use std::cell::RefCell;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
-use iron;
 use gdk::enums::key;
 use glib;
 use gtk;
@@ -17,7 +16,7 @@ struct Gui {
 	builder: Builder,
 }
 
-pub fn main(file_sender: Arc<Mutex<FileSender>>, server: &iron::Listening) {
+pub fn main(file_sender: Arc<Mutex<FileSender>>, address: &str) {
 	// Initialize gui
 	gtk::init().expect("Failed to initialize GTK");
 
@@ -31,7 +30,7 @@ pub fn main(file_sender: Arc<Mutex<FileSender>>, server: &iron::Listening) {
 	});
 
 	let description_label: gtk::Entry = builder.get_object("descriptionLabel").unwrap();
-	description_label.set_text(format!("{}", server.socket).as_str());
+	description_label.set_text(address);
 	// Select the text
 	//description_label.select_region(0, -1);
 
