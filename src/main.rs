@@ -286,7 +286,7 @@ impl<'a, 'r> FromRequest<'a, 'r> for MyHeaders {
 		for name in rh.iter().map(|h| h.name)
 			.fold(Vec::<String>::new(), |mut v, n| {
 				// Take each name only once
-				if v.last().map(|l| *l != n).unwrap_or(true) {
+				if v.last().map(|l| *l != n.as_str()).unwrap_or(true) {
 					v.push(n.to_string());
 				}
 				v
