@@ -235,7 +235,7 @@ fn handle_index() -> Option<String> {
 
 #[get("/static/<file..>")]
 fn handle_static<'r>(file: PathBuf) -> Option<WebFile> {
-	WebFile::new(file)
+	WebFile::new(Path::new("static").join(file))
 }
 
 #[derive(FromForm)]
