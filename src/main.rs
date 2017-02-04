@@ -263,7 +263,11 @@ fn handle_file_download<'r>(index: usize)
 			)],
 		};
 		Some(File::open(path).map(|f| {
-			Response::build()
+			let mut response = Response::build();
+			if let Ok(data) = f.metadata() {
+				response.header(header::ContentLength(data.len()));
+			}
+			response
 				.header(ContentType::new("application", "octet-stream"))
 				.header(header)
 				.streamed_body(f)
