@@ -7,21 +7,17 @@
 extern crate clap;
 #[macro_use]
 extern crate error_chain;
+extern crate hyper;
 extern crate mime_multipart;
 extern crate glib;
 extern crate gdk;
 extern crate gtk;
-#[macro_use]
-extern crate lazy_static;
 extern crate rocket;
 extern crate tempfile;
 
 mod gui;
 
-use std::env;
-#[cfg(not(feature = "bundled"))]
 use std::fs::{self, File};
-#[cfg(not(feature = "bundled"))]
 use std::io::{Cursor, Read};
 use std::net::{IpAddr, ToSocketAddrs};
 use std::path::{Path, PathBuf};
@@ -31,11 +27,10 @@ use std::thread;
 use std::vec::Vec;
 
 use clap::{App, AppSettings, Arg};
-use rocket::config;
-use rocket::Data;
+use rocket::{config, Data, State};
 use rocket::http::ContentType;
 use rocket::http::hyper::header;
-use rocket::response::{self, Redirect, Responder, Response};
+use rocket::response::{self, content, Redirect, Responder, Response};
 use rocket::request::{Form, FromRequest, Request, Outcome};
 
 mod errors {
@@ -63,52 +58,6 @@ struct Config {
 	port: u16,
 	upload_file_name: String,
 	upload_file_size: usize,
-}
-
-lazy_static! {
-	static ref CONFIG: Config = {
-		// Parse command line options
-		let args = App::new("FileSender")
-			.version(crate_version!())
-			.author(crate_authors!())
-			.about("Send and receive files using a website")
-			.global_setting(AppSettings::ColoredHelp)
-			.arg(Arg::with_name("address").short("a").long("address")
-				.validator(validate::<IpAddr>)
-				.default_value("0.0.0.0")
-				.help("The address for the server to listen"))
-			.arg(Arg::with_name("port").short("p").long("port")
-				.validator(validate::<u16>)
-				.default_value("44333")
-				.help("The port for the server to listen"))
-			.arg(Arg::with_name("upload-filename").short("u")
-				.long("upload-filename")
-				.default_value("Upload.file")
-				.help("The filename that will be used to save uploaded files"))
-			.arg(Arg::with_name("upload-size").short("s").long("upload-size")
-				.default_value("50000000")
-				.validator(validate::<usize>)
-				.help("The maximum size for uploaded files"))
-			.get_matches();
-		Config {
-			address: IpAddr::from_str(args.value_of("address").unwrap())
-				.unwrap(),
-			port: u16::from_str(args.value_of("port").unwrap()).unwrap(),
-			upload_file_name: args.value_of("upload-filename").unwrap()
-				.to_string(),
-			upload_file_size: usize::from_str(args.value_of("upload-size")
-				.unwrap()).unwrap(),
-		}
-	};
-	static ref FILE_SENDER: Arc<Mutex<FileSender>> = {
-		Arc::new(Mutex::new(FileSender {
-			upload_file_name: CONFIG.upload_file_name.clone(),
-			upload_file_size: CONFIG.upload_file_size,
-			upload_text: String::new(),
-			download_text: String::new(),
-			download_files: Vec::new(),
-		}))
-	};
 }
 
 fn validate<T: FromStr>(val: String) -> std::result::Result<(), String>
@@ -162,9 +111,50 @@ fn get_web_string(path: &str) -> Option<String> {
 }
 
 fn main() {
-	let server = start_server((CONFIG.address, CONFIG.port));
+		// Parse command line options
+	let config = {
+		let args = App::new("FileSender")
+			.version(crate_version!())
+			.author(crate_authors!())
+			.about("Send and receive files using a website")
+			.global_setting(AppSettings::ColoredHelp)
+			.arg(Arg::with_name("address").short("a").long("address")
+				.validator(validate::<IpAddr>)
+				.default_value("0.0.0.0")
+				.help("The address for the server to listen"))
+			.arg(Arg::with_name("port").short("p").long("port")
+				.validator(validate::<u16>)
+				.default_value("44333")
+				.help("The port for the server to listen"))
+			.arg(Arg::with_name("upload-filename").short("u")
+				.long("upload-filename")
+				.default_value("Upload.file")
+				.help("The filename that will be used to save uploaded files"))
+			.arg(Arg::with_name("upload-size").short("s").long("upload-size")
+				.default_value("50000000")
+				.validator(validate::<usize>)
+				.help("The maximum size for uploaded files"))
+			.get_matches();
+		Config {
+			address: IpAddr::from_str(args.value_of("address").unwrap())
+				.unwrap(),
+			port: u16::from_str(args.value_of("port").unwrap()).unwrap(),
+			upload_file_name: args.value_of("upload-filename").unwrap()
+				.to_string(),
+			upload_file_size: usize::from_str(args.value_of("upload-size")
+				.unwrap()).unwrap(),
+		}
+	};
+	let file_sender = Arc::new(Mutex::new(FileSender {
+		upload_file_name: config.upload_file_name.clone(),
+		upload_file_size: config.upload_file_size,
+		upload_text: String::new(),
+		download_text: String::new(),
+		download_files: Vec::new(),
+	}));
+	let server = start_server(file_sender.clone(), (config.address, config.port));
 
-	gui::main(FILE_SENDER.clone(), &server);
+	gui::main(file_sender, &server);
 
 	// Seems like closing a rocket server is not possible, it will be closed
 	// when this thread exits, i.e. when the gui window is closed.
@@ -196,31 +186,30 @@ impl<'r> Responder<'r> for WebFile {
 	}
 }
 
-fn start_server<To: ToSocketAddrs>(addr: To) -> String {
+fn start_server<To: ToSocketAddrs>(file_sender: Arc<Mutex<FileSender>>, addr: To) -> String {
 	// Enable logging
 	rocket::logger::init(rocket::LoggingLevel::Normal);
 	let addr = addr.to_socket_addrs().unwrap().next().unwrap();
-	let config = config::Config::default_for(
-			config::Environment::active().unwrap(),
-			env::current_dir().unwrap().to_str().unwrap()).unwrap()
+	let config = config::Config::build(config::Environment::active().unwrap())
 		.address(addr.ip().to_string())
-		.port(addr.port() as usize);
-	let r = rocket::custom(&config).mount("/", routes![
+		.port(addr.port())
+		.unwrap();
+	let r = rocket::custom(config, false).mount("/", routes![
 		handle_index,
 		handle_static,
 		handle_text,
 		handle_file_download,
 		handle_file_upload,
-	]);
+	]).manage(file_sender);
 	thread::spawn(|| r.launch());
 	// Set the port
 	addr.to_string()
 }
 
 #[get("/")]
-fn handle_index() -> Option<String> {
+fn handle_index(file_sender: State<Arc<Mutex<FileSender>>>) -> Option<content::HTML<String>> {
 	get_web_string("index.html").map(|mut content| {
-		let fs = FILE_SENDER.lock().unwrap();
+		let fs = file_sender.lock().unwrap();
 		content = content.replace("{download_text}", fs.download_text.as_str());
 		content = content.replace("{upload_text}", fs.upload_text.as_str());
 		let text = fs.download_files.iter().map(|p| get_filename(p))
@@ -229,7 +218,7 @@ fn handle_index() -> Option<String> {
 				s, i = i, path = p));
 		content = content.replace("{download_files}",
 			format!(r###"<ul class="file-list">{}</ul>"###, text).as_str());
-		content
+		content::HTML(content)
 	})
 }
 
@@ -242,16 +231,16 @@ fn handle_static<'r>(file: PathBuf) -> Option<WebFile> {
 struct Text { text: String }
 
 #[post("/data/text", data = "<text>")]
-fn handle_text(text: Form<Text>) -> Redirect {
-	gui::handle_text_upload(FILE_SENDER.clone(), &text.get().text);
+fn handle_text(file_sender: State<Arc<Mutex<FileSender>>>, text: Form<Text>) -> Redirect {
+	gui::handle_text_upload(file_sender.clone(), &text.get().text);
 	// Redirect to base url
 	Redirect::to("/")
 }
 
-#[get("data/download/<index>")]
-fn handle_file_download<'r>(index: usize)
+#[get("/data/download/<index>")]
+fn handle_file_download<'r>(file_sender: State<Arc<Mutex<FileSender>>>, index: usize)
 	-> Option<Result<Response<'r>>> {
-	let fs = FILE_SENDER.lock().unwrap();
+	let fs = file_sender.lock().unwrap();
 	if let Some(path) = fs.download_files.get(index) {
 		let name = get_filename(path);
 		println!("Downloaded {}", name);
@@ -279,13 +268,13 @@ fn handle_file_download<'r>(index: usize)
 }
 
 /// Convert `rocket` headers back to `hyper` headers.
-struct MyHeaders(header::Headers);
+struct MyHeaders(hyper::header::Headers);
 
 impl<'a, 'r> FromRequest<'a, 'r> for MyHeaders {
 	type Error = Error;
 	fn from_request(request: &'a Request<'r>)
 		-> Outcome<Self, Self::Error> {
-		let mut headers = header::Headers::new();
+		let mut headers = hyper::header::Headers::new();
 		let rh = request.headers();
 		for name in rh.iter().map(|h| h.name)
 			.fold(Vec::<String>::new(), |mut v, n| {
@@ -302,10 +291,11 @@ impl<'a, 'r> FromRequest<'a, 'r> for MyHeaders {
 	}
 }
 
-#[post("data/upload", data = "<data>")]
-fn handle_file_upload(data: Data, headers: MyHeaders) -> Result<Redirect> {
+#[post("/data/upload", data = "<data>")]
+fn handle_file_upload(file_sender: State<Arc<Mutex<FileSender>>>, data: Data,
+		headers: MyHeaders) -> Result<Redirect> {
 	let (upload_file_name, upload_file_size) = {
-		let fs = FILE_SENDER.lock().unwrap();
+		let fs = file_sender.lock().unwrap();
 		(fs.upload_file_name.clone(), fs.upload_file_size)
 	};
 	// Read the form data with a limited size
@@ -333,7 +323,7 @@ fn handle_file_upload(data: Data, headers: MyHeaders) -> Result<Redirect> {
 		println!("Moving uploaded file {:?} to {:?}", file.path, dest);
 		// Move the file
 		fs::copy(&file.path, &dest)?;
-		gui::handle_file_upload(FILE_SENDER.clone(), Some(dest.into_os_string().into_string().unwrap()), false);
+		gui::handle_file_upload(file_sender.clone(), Some(dest.into_os_string().into_string().unwrap()), false);
 	} else {
 		bail!("Uploaded file not found");
 	}

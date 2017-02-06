@@ -13,10 +13,10 @@ bundled = []
 [dependencies]
 clap = "*"
 error-chain = "*"
+hyper = "0.9"
 mime_multipart = "*"
 glib = "*"
 gdk = "*"
-lazy_static = "*"
 rocket = "*"
 rocket_codegen = "*"
 tempfile = "*"
